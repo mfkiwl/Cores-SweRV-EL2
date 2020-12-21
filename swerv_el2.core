@@ -1,6 +1,6 @@
 CAPI=2:
 
-name : chipsalliance.org:cores:SweRV_EL2:0
+name : chipsalliance.org:cores:SweRV_EL2:1.3
 
 filesets:
   rtl:
@@ -63,7 +63,7 @@ targets:
     tools:
       verilator :
         mode : lint-only
-    toplevel : swerv_wrapper
+    toplevel : el2_swerv_wrapper
 
   synth:
     default_tool : vivado
@@ -74,7 +74,7 @@ targets:
       vivado:
         part : xc7a100tcsg324-1
         pnr  : none
-    toplevel : swerv_wrapper
+    toplevel : el2_swerv_wrapper
 
 generate:
   swerv_default_config:
@@ -85,7 +85,7 @@ generate:
 
 generators:
   swerv_el2_config:
-    interpreter: python
+    interpreter: python3
     command: configs/swerv_config_gen.py
     description : Create a SweRV EL2 configuration. Note! Only supports the default config
 

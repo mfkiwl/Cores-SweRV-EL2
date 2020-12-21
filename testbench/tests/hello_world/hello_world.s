@@ -20,31 +20,11 @@
 
 #include "defines.h"
 
-#define STDOUT 0xd0580000
-
-
-// Code to execute
 .section .text
-.global _start
-_start:
+.global main
 
-    // Clear minstret
-    csrw minstret, zero
-    csrw minstreth, zero
-
-    // Set up MTVEC - not expecting to use it though
-    li x1, RV_ICCM_SADR
-    csrw mtvec, x1
-
-
-    // Enable Caches in MRAC
-    li x1, 0x5f555555
-    csrw 0x7c0, x1
-
-    // Load string from hw_data
-    // and write to stdout address
-
-    li x3, STDOUT
+main:
+    li x3, RV_SERIALIO
     la x4, hw_data
 
 loop:
@@ -52,16 +32,7 @@ loop:
    sb x5, 0(x3)
    addi x4, x4, 1
    bnez x5, loop
-
-// Write 0xff to STDOUT for TB to termiate test.
-_finish:
-    li x3, STDOUT
-    addi x5, x0, 0xff
-    sb x5, 0(x3)
-    beq x0, x0, _finish
-.rept 100
-    nop
-.endr
+   ret
 
 .data
 hw_data:
