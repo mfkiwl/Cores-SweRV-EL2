@@ -20,7 +20,7 @@ TEST_CFLAGS = -g -O3 -funroll-all-loops
 ABI = -mabi=ilp32 -march=rv32imac
 
 # Check for RV_ROOT
-ifeq (,$(wildcard ${RV_ROOT}/configs/swerv.config))
+ifeq (,$(wildcard ${RV_ROOT}/configs/veer.config))
 $(error env var RV_ROOT does not point to a valid dir! Exiting!)
 endif
 
@@ -29,7 +29,7 @@ target = default
 snapshot = $(target)
 
 # Allow tool override
-SWERV_CONFIG = ${RV_ROOT}/configs/swerv.config
+VEER_CONFIG = ${RV_ROOT}/configs/veer.config
 IRUN = xrun
 VCS = vcs
 VLOG = qverilog
@@ -38,6 +38,7 @@ RIVIERA = riviera
 GCC_PREFIX = riscv64-unknown-elf
 BUILD_DIR = snapshots/${snapshot}
 TBDIR = ${RV_ROOT}/testbench
+PICOLIBC_DIR = ${RV_ROOT}/third_party/picolibc/install
 
 # Define test name
 TEST = hello_world
@@ -92,7 +93,7 @@ VERILATOR_MAKE_FLAGS = OPT_FAST="-Os"
 all: clean verilator
 
 clean:
-	rm -rf *.log *.s *.hex *.dis *.tbl irun* vcs* simv* *.map snapshots swerv* \
+	rm -rf *.log *.s *.hex *.dis *.tbl irun* vcs* simv* *.map snapshots veer* \
 	verilator* *.exe obj* *.o ucli.key vc_hdrs.h csrc *.csv work\
 	dataset.asdb  library.cfg vsimsa.cfg  riviera-build wave.asdb
 
@@ -100,9 +101,9 @@ clean:
 
 ############ Model Builds ###############################
 
-# If define files do not exist, then run swerv.config.
+# If define files do not exist, then run veer.config.
 ${BUILD_DIR}/defines.h:
-	BUILD_PATH=${BUILD_DIR} ${RV_ROOT}/configs/swerv.config -target=$(target) $(CONF_PARAMS)
+	BUILD_PATH=${BUILD_DIR} ${RV_ROOT}/configs/veer.config -target=$(target) $(CONF_PARAMS)
 
 verilator-build: ${TBFILES} ${BUILD_DIR}/defines.h test_tb_top.cpp
 	echo '`undef RV_ASSERT_ON' >> ${BUILD_DIR}/common_defines.vh
@@ -124,7 +125,7 @@ vcs-build: ${TBFILES} ${BUILD_DIR}/defines.h
 
 irun-build: ${TBFILES} ${BUILD_DIR}/defines.h
 	$(IRUN) -64bit -elaborate $(IRUN_DEBUG) -q -sv -sysv  -nowarn CUVIHR \
-	  -xmlibdirpath . -xmlibdirname swerv.build \
+	  -xmlibdirpath . -xmlibdirname veer.build \
 	  -incdir ${RV_ROOT}/design/lib -incdir ${RV_ROOT}/design/include \
 	  -vlog_ext +.vh+.h $(defines) -incdir $(BUILD_DIR) \
 	  -f ${RV_ROOT}/testbench/flist -top tb_top  ${TBFILES} \
@@ -150,7 +151,7 @@ verilator: program.hex verilator-build
 
 irun: program.hex irun-build
 	$(IRUN) -64bit -abvglobalfailurelimit 1 +lic_queue -licqueue \
-	  -status -xmlibdirpath . -xmlibdirname swerv.build \
+	  -status -xmlibdirpath . -xmlibdirname veer.build \
 	  -snapshot ${snapshot} -r $(snapshot) $(IRUN_DEBUG_RUN) $(profile)
 
 vcs: program.hex vcs-build
@@ -166,20 +167,23 @@ riviera: program.hex riviera-build
 
 
 ############ TEST build ###############################
-    
+
+picolibc:
+	$(MAKE) -f ${RV_ROOT}/tools/picolibc.mk all
+
 ifeq ($(shell which $(GCC_PREFIX)-gcc 2> /dev/null),)
-program.hex: ${BUILD_DIR}/defines.h
+program.hex: picolibc ${BUILD_DIR}/defines.h
 	@echo " !!! No $(GCC_PREFIX)-gcc in path, using canned hex files !!"
 	cp ${HEX_DIR}/$(TEST).hex program.hex
 else
 ifneq (,$(wildcard $(TEST_DIR)/$(TEST).makefile))
-program.hex:
+program.hex: picolibc
 	@echo Building $(TEST) via $(TEST_DIR)/$(TEST).makefile
 	$(MAKE) -f $(TEST_DIR)/$(TEST).makefile
 else
-program.hex: $(OFILES) $(LINK)
+program.hex: picolibc $(OFILES) $(LINK)
 	@echo Building $(TEST)
-	$(GCC_PREFIX)-gcc $(ABI) -Wl,-Map=$(TEST).map -lgcc -T$(LINK) -o $(TEST).exe $(OFILES) -nostartfiles  $(TEST_LIBS)
+	$(GCC_PREFIX)-gcc $(ABI) --verbose -Wl,-Map=$(TEST).map -T$(LINK) --specs=$(PICOLIBC_DIR)/picolibc.specs $(TEST_LIBS) -nostartfiles $(OFILES) -o $(TEST).exe
 	$(GCC_PREFIX)-objcopy -O verilog  $(TEST).exe program.hex
 	$(GCC_PREFIX)-objdump -S  $(TEST).exe > $(TEST).dis
 	@echo Completed building $(TEST)
@@ -190,8 +194,8 @@ program.hex: $(OFILES) $(LINK)
 	$(GCC_PREFIX)-as ${ABI} $*.cpp.s -o $@
 
 
-%.o : %.c ${BUILD_DIR}/defines.h
-	$(GCC_PREFIX)-gcc ${includes} ${TEST_CFLAGS} -DCOMPILER_FLAGS="\"${TEST_CFLAGS}\"" ${ABI} -nostdlib -c $< -o $@
+%.o : %.c picolibc ${BUILD_DIR}/defines.h
+	$(GCC_PREFIX)-gcc ${includes} --specs=$(PICOLIBC_DIR)/picolibc.specs ${TEST_CFLAGS} -DCOMPILER_FLAGS="\"${TEST_CFLAGS}\"" ${ABI} -c $< -o $@
 
 endif
 endif
@@ -201,5 +205,5 @@ help:
 	@echo Make sure the environment variable RV_ROOT is set.
 	@echo Possible targets: verilator vcs irun vlog riviera help clean all verilator-build irun-build vcs-build riviera-build program.hex
 
-.PHONY: help clean verilator vcs irun vlog riviera
+.PHONY: help clean picolibc verilator vcs irun vlog riviera
 

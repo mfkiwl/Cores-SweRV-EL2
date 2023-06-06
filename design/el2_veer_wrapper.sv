@@ -16,11 +16,11 @@
 //********************************************************************************
 // $Id$
 //
-// Function: Top wrapper file with el2_swerv/mem instantiated inside
+// Function: Top wrapper file with el2_veer/mem instantiated inside
 // Comments:
 //
 //********************************************************************************
-module el2_swerv_wrapper
+module el2_veer_wrapper
 import el2_pkg::*;
  #(
 `include "el2_param.vh"
@@ -330,6 +330,7 @@ import el2_pkg::*;
    input logic                             i_cpu_run_req, // Async restart req to CPU
    output logic                            o_cpu_run_ack, // Core response to run req
    input logic                             scan_mode,     // To enable scan mode
+   input logic                             scan_rst_l,
    input logic                             mbist_mode     // to enable mbist
 );
 
@@ -684,8 +685,8 @@ import el2_pkg::*;
    logic [31:0]            dmi_reg_wdata;
    logic [31:0]            dmi_reg_rdata;
 
-   // Instantiate the el2_swerv core
-   el2_swerv #(.pt(pt)) swerv (
+   // Instantiate the el2_veer core
+   el2_veer #(.pt(pt)) veer (
                                 .clk(clk),
                                 .*
                                 );
@@ -722,8 +723,8 @@ import el2_pkg::*;
 `ifdef RV_ASSERT_ON
 // to avoid internal assertions failure at time 0
 initial begin
-    $assertoff(0, swerv);
-    @ (negedge clk) $asserton(0, swerv);
+    $assertoff(0, veer);
+    @ (negedge clk) $asserton(0, veer);
 end
 `endif
 
