@@ -1,0 +1,269 @@
+name: RISCV-DV tests
+
+on:
+  workflow_call:
+
+jobs:
+
+#--------------#
+#    Renode
+#--------------#
+  renode:
+    name: Download Renode
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: "/opt/veer-el2/.cache/"
+      DEBIAN_FRONTEND: "noninteractive"
+
+    steps:
+      - name: Create Cache Timestamp
+        id: cache_timestamp
+        uses: nanzm/get-time-action@v2.0
+        with:
+          format: 'YYYY-MM-DD-HH-mm-ss'
+
+      - name: Setup cache
+        uses: actions/cache@v3
+        timeout-minutes: 60
+        continue-on-error: true
+        with:
+          path: "/opt/veer-el2/.cache/"
+          key: cache_renode_${{ steps.cache_timestamp.outputs.time }}
+          restore-keys: cache_renode_
+
+      - name: Get latest release
+        uses: robinraju/release-downloader@v1.8
+        with:
+          repository: "renode/renode"
+          latest: true
+          fileName: "renode-*.linux-portable.tar.gz"
+          extract: false
+
+      - name: Rename the archive
+        run: |
+          mv ${{ github.workspace }}/renode-*.tar.gz ${{ github.workspace }}/renode.tar.gz
+
+      - name: Store Renode binaries
+        uses: actions/upload-artifact@v3
+        with:
+          name: renode
+          path: ${{ github.workspace }}/renode.tar.gz
+          retention-days: 1
+
+#--------------#
+#    VeeR-ISS
+#--------------#
+  veer-iss:
+    name: Build VeeR-ISS
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: "/opt/veer-el2/.cache/"
+      DEBIAN_FRONTEND: "noninteractive"
+
+    steps:
+      - name: Install prerequisities
+        run: |
+          sudo apt -qqy update && sudo apt -qqy --no-install-recommends install \
+            git build-essential ccache libboost-all-dev
+
+      - name: Create Cache Timestamp
+        id: cache_timestamp
+        uses: nanzm/get-time-action@v2.0
+        with:
+          format: 'YYYY-MM-DD-HH-mm-ss'
+
+      - name: Setup cache
+        uses: actions/cache@v3
+        timeout-minutes: 60
+        continue-on-error: true
+        with:
+          path: "/opt/veer-el2/.cache/"
+          key: cache_veer-iss_${{ steps.cache_timestamp.outputs.time }}
+          restore-keys: cache_veer-iss_
+
+      - name: Build VeeR-ISS
+        run: |
+          git clone https://github.com/chipsalliance/VeeR-ISS veer-iss
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          pushd veer-iss
+            git checkout 666c94e
+            make -j`nproc`
+            mkdir -p /opt/veer-iss
+            cp build-Linux/whisper /opt/veer-iss/
+          popd
+          cd /opt && tar -czvf veer-iss.tar.gz veer-iss/
+
+      - name: Store VeeR-ISS binaries
+        uses: actions/upload-artifact@v3
+        with:
+          name: veer-iss
+          path: /opt/*.tar.gz
+          retention-days: 1
+
+#--------------#
+#    Tests
+#--------------#
+  tests:
+    name: Run RISC-V DV tests
+    runs-on: ubuntu-latest
+    needs: [veer-iss, renode]
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - riscv_arithmetic_basic_test
+        iss:
+          - spike
+          - whisper
+          - renode
+        coverage: ["branch", "toggle"] #TODO: add functional coverage
+
+    env:
+      DEBIAN_FRONTEND: "noninteractive"
+      CCACHE_DIR: "/opt/riscv-dv/.cache/"
+      VERILATOR_VERSION: v5.010
+      SPIKE_VERSION: d70ea67d
+
+    steps:
+      - name: Install utils
+        run: |
+          sudo apt -qqy update && sudo apt -qqy --no-install-recommends install \
+            git cpanminus ccache device-tree-compiler python3-minimal python3-pip \
+            libboost-all-dev gcc-riscv64-unknown-elf
+          sudo cpanm Bit::Vector
+
+      - name: Setup Cache Metadata
+        id: cache_metadata
+        run: |
+          date=$(date +"%Y_%m_%d")
+          time=$(date +"%Y%m%d_%H%M%S_%N")
+          cache_verilator_restore_key=cache_verilator_
+          cache_verilator_key=${cache_verilator_restore_key}${{ env.VERILATOR_VERSION }}
+          cache_spike_restore_key=cache_spike_
+          cache_spike_key=${cache_spike_restore_key}${{ env.SPIKE_VERSION }}
+          cache_test_restore_key=${{ matrix.test }}_${{ matrix.coverage }}_
+          cache_test_key=${cache_test_restore_key}${time}
+
+          echo "date=$date" | tee -a "$GITHUB_ENV"
+          echo "time=$time" | tee -a "$GITHUB_ENV"
+          echo "cache_verilator_restore_key=$cache_verilator_restore_key" | tee -a "$GITHUB_ENV"
+          echo "cache_verilator_key=$cache_verilator_key" | tee -a "$GITHUB_ENV"
+          echo "cache_spike_restore_key=$cache_spike_restore_key" | tee -a "$GITHUB_ENV"
+          echo "cache_spike_key=$cache_spike_key" | tee -a "$GITHUB_ENV"
+          echo "cache_test_restore_key=$cache_test_restore_key" | tee -a "$GITHUB_ENV"
+          echo "cache_test_key=$cache_test_key" | tee -a "$GITHUB_ENV"
+
+      - name: Restore verilator cache
+        id: cache-verilator-restore
+        uses: actions/cache/restore@v3
+        with:
+          path: |
+            /opt/verilator
+            /opt/verilator/.cache
+          key: ${{ env.cache_verilator_key }}
+          restore-keys: ${{ env.cache_verilator_restore_key }}
+
+      - name: Restore Spike cache
+        id: cache-spike-restore
+        uses: actions/cache/restore@v3
+        with:
+          path: |
+            /opt/spike
+            /opt/spike/.cache
+          key: ${{ env.cache_spike_key }}
+          restore-keys: ${{ env.cache_spike_restore_key }}
+
+      - name: Download Renode binaries
+        uses: actions/download-artifact@v3
+        with:
+          name: renode
+          path: /opt
+
+      - name: Download VeeR-ISS binaries
+        uses: actions/download-artifact@v3
+        with:
+          name: veer-iss
+          path: /opt
+
+      - name: Unpack binaries
+        run: |
+          pushd /opt
+            tar -zxvf veer-iss.tar.gz
+            tar -zxvf renode.tar.gz --strip-components=1
+          popd
+
+      - name: Setup repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Install Python deps
+        run: |
+          pip install -r third_party/riscv-dv/requirements.txt
+
+      - name: Create Cache Timestamp
+        id: cache_timestamp
+        uses: nanzm/get-time-action@v2.0
+        with:
+          format: 'YYYY-MM-DD-HH-mm-ss'
+
+      - name: Setup cache
+        uses: actions/cache@v3
+        timeout-minutes: 60
+        continue-on-error: true
+        with:
+          path: "/opt/veer-el2/.cache/"
+          key: cache_tests_${{ steps.cache_timestamp.outputs.time }}
+          restore-keys: cache_tests_
+
+      - name: Run test
+        run: |
+          export PATH=/opt/verilator/bin:$PATH
+          export PATH=/opt/veer-iss:$PATH
+          export RV_ROOT=`realpath .`
+          export RISCV_GCC=riscv64-unknown-elf-gcc
+          export RISCV_OBJCOPY=riscv64-unknown-elf-objcopy
+          export SPIKE_PATH=/opt/spike/bin
+          export WHISPER_ISS=/opt/veer-iss/whisper
+          export RENODE_PATH=/opt/renode
+
+          echo "RV_ROOT=${RV_ROOT}" >> ${GITHUB_ENV}
+          echo "PATH=${PATH}"       >> ${GITHUB_ENV}
+
+          ${RISCV_GCC} --version
+
+          pushd tools/riscv-dv
+            make -j`nproc` \
+              RISCV_DV_TEST=${{ matrix.test }} \
+              RISCV_DV_ISS=${{ matrix.iss }} \
+              RISCV_DV_ITER=3 \
+              RISCV_DV_SEED=999 \
+              COVERAGE=${{ matrix.coverage }} \
+              run
+          popd
+
+      - name: Prepare coverage data
+        run: |
+          mkdir -p coverage_riscv-dv_${{ matrix.test }}
+          mv ${RV_ROOT}/tools/riscv-dv/work/coverage.dat coverage_riscv-dv_${{ matrix.test }}/
+          echo "Prepared coverage data"
+          .github/scripts/convert_coverage_data.sh \
+              ${{ matrix.coverage }} \
+              coverage_riscv-dv_${{ matrix.test }} \
+              results coverage_riscv-dv_${{ matrix.test }}
+          echo "convert_coverage_data.sh exited with RET_CODE = "$?
+
+      - name: Pack artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: riscv-dv_coverage_data
+          path: results/*.info
+
+      - name: Pack artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: artifacts-${{ matrix.test }}-${{ matrix.iss }}
+          path: tools/riscv-dv/work/test_*

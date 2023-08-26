@@ -13,14 +13,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
+
 `ifndef VERILATOR
 module tb_top;
 `else
-module tb_top ( input bit core_clk );
+module tb_top (
+    input bit                   core_clk,
+    input bit [31:0]            mem_signature_begin,
+    input bit [31:0]            mem_signature_end
+);
 `endif
 
 `ifndef VERILATOR
     bit                         core_clk;
+    bit          [31:0]         mem_signature_begin = 32'd0; // TODO:
+    bit          [31:0]         mem_signature_end   = 32'd0;
 `endif
     logic                       rst_l;
     logic                       porst_l;
@@ -104,6 +111,10 @@ module tb_top ( input bit core_clk );
     logic                       wb_valid;
     logic [4:0]                 wb_dest;
     logic [31:0]                wb_data;
+
+    logic                       wb_csr_valid;
+    logic [11:0]                wb_csr_dest;
+    logic [31:0]                wb_csr_data;
 
 `ifdef RV_BUILD_AXI4
    //-------------------------- LSU AXI signals--------------------------
@@ -334,6 +345,12 @@ module tb_top ( input bit core_clk );
             $fwrite(fd,"%c", WriteData[7:0]);
             $write("%c", WriteData[7:0]);
         end
+        // Memory signature dump
+        if(mailbox_write && (WriteData[7:0] == 8'hFF || WriteData[7:0] == 8'h01)) begin
+            if (mem_signature_begin < mem_signature_end) begin
+                dump_signature();
+            end
+        end
         // End Of test monitor
         if(mailbox_write && WriteData[7:0] == 8'hff) begin
             $display("TEST_PASSED");
@@ -350,9 +367,12 @@ module tb_top ( input bit core_clk );
 
     // trace monitor
     always @(posedge core_clk) begin
-        wb_valid  <= `DEC.dec_i0_wen_r;
-        wb_dest   <= `DEC.dec_i0_waddr_r;
-        wb_data   <= `DEC.dec_i0_wdata_r;
+        wb_valid      <= `DEC.dec_i0_wen_r;
+        wb_dest       <= `DEC.dec_i0_waddr_r;
+        wb_data       <= `DEC.dec_i0_wdata_r;
+        wb_csr_valid  <= `DEC.dec_csr_wen_r;
+        wb_csr_dest   <= `DEC.dec_csr_wraddr_r;
+        wb_csr_data   <= `DEC.dec_csr_wrdata_r;
         if (trace_rv_i_valid_ip) begin
            $fwrite(tp,"%b,%h,%h,%0h,%0h,3,%b,%h,%h,%b\n", trace_rv_i_valid_ip, 0, trace_rv_i_address_ip,
                   0, trace_rv_i_insn_ip,trace_rv_i_exception_ip,trace_rv_i_ecause_ip,
@@ -360,18 +380,19 @@ module tb_top ( input bit core_clk );
            // Basic trace - no exception register updates
            // #1 0 ee000000 b0201073 c 0b02       00000000
            commit_count++;
-           $fwrite (el, "%10d : %8s 0 %h %h%13s ; %s\n", cycleCnt, $sformatf("#%0d",commit_count),
+           $fwrite (el, "%10d : %8s 0 %h %h%13s %14s ; %s\n", cycleCnt, $sformatf("#%0d",commit_count),
                         trace_rv_i_address_ip, trace_rv_i_insn_ip,
-                        (wb_dest !=0 && wb_valid)?  $sformatf("%s=%h", abi_reg[wb_dest], wb_data) : "             ",
+                        (wb_dest !=0 && wb_valid)?  $sformatf("%s=%h", abi_reg[wb_dest], wb_data) : "            ",
+                        (wb_csr_valid)? $sformatf("c%h=%h", wb_csr_dest, wb_csr_data) : "             ",
                         dasm(trace_rv_i_insn_ip, trace_rv_i_address_ip, wb_dest & {5{wb_valid}}, wb_data)
                    );
         end
         if(`DEC.dec_nonblock_load_wen) begin
-            $fwrite (el, "%10d : %32s=%h ; nbL\n", cycleCnt, abi_reg[`DEC.dec_nonblock_load_waddr], `DEC.lsu_nonblock_load_data);
+            $fwrite (el, "%10d : %32s=%h                ; nbL\n", cycleCnt, abi_reg[`DEC.dec_nonblock_load_waddr], `DEC.lsu_nonblock_load_data);
             tb_top.gpr[0][`DEC.dec_nonblock_load_waddr] = `DEC.lsu_nonblock_load_data;
         end
         if(`DEC.exu_div_wren) begin
-            $fwrite (el, "%10d : %32s=%h ; nbD\n", cycleCnt, abi_reg[`DEC.div_waddr_wb], `DEC.exu_div_result);
+            $fwrite (el, "%10d : %32s=%h                ; nbD\n", cycleCnt, abi_reg[`DEC.div_waddr_wb], `DEC.exu_div_result);
             tb_top.gpr[0][`DEC.div_waddr_wb] = `DEC.exu_div_result;
         end
     end
@@ -422,7 +443,7 @@ module tb_top ( input bit core_clk );
         $readmemh("program.hex",  imem.mem);
         tp = $fopen("trace_port.csv","w");
         el = $fopen("exec.log","w");
-        $fwrite (el, "//   Cycle : #inst    0    pc    opcode    reg=value   ; mnemonic\n");
+        $fwrite (el, "//   Cycle : #inst    0    pc    opcode    reg=value    csr=value     ; mnemonic\n");
         fd = $fopen("console.log","w");
         commit_count = 0;
         preload_dccm();
@@ -744,7 +765,6 @@ el2_veer_wrapper rvtop (
     .soft_int               ('0),
     .core_id                ('0),
     .scan_mode              ( 1'b0 ),         // To enable scan mode
-    .scan_rst_l             ( 1'b1 ),
     .mbist_mode             ( 1'b0 )        // to enable mbist
 
 );
@@ -1163,6 +1183,58 @@ function int get_iccm_bank(input[31:0] addr,  output int bank_idx);
     return int'( addr[5:2]);
 `endif
 endfunction
+
+task dump_signature ();
+    integer fp, i;
+
+    $display("Dumping memory signature (0x%08X - 0x%08X)...",
+        mem_signature_begin,
+        mem_signature_end
+    );
+
+    fp = $fopen("veer.signature", "w");
+    for (i=mem_signature_begin; i<mem_signature_end; i=i+4) begin
+
+        // From DCCM
+`ifdef RV_DCCM_ENABLE
+        if (i >= `RV_DCCM_SADR && i < `RV_DCCM_EADR) begin
+            bit[38:0] data;
+            int bank, indx;
+            bank = get_dccm_bank(i, indx);
+
+            case (bank)
+            0: data = `DRAM(0)[indx];
+            1: data = `DRAM(1)[indx];
+            `ifdef RV_DCCM_NUM_BANKS_4
+            2: data = `DRAM(2)[indx];
+            3: data = `DRAM(3)[indx];
+            `endif
+            `ifdef RV_DCCM_NUM_BANKS_8
+            2: data = `DRAM(2)[indx];
+            3: data = `DRAM(3)[indx];
+            4: data = `DRAM(4)[indx];
+            5: data = `DRAM(5)[indx];
+            6: data = `DRAM(6)[indx];
+            7: data = `DRAM(7)[indx];
+            `endif
+            endcase
+
+            $fwrite(fp, "%08X\n", data[31:0]);
+        end else
+`endif
+        // From RAM
+        begin
+            $fwrite(fp, "%02X%02X%02X%02X\n",
+                lmem.mem[i+3],
+                lmem.mem[i+2],
+                lmem.mem[i+1],
+                lmem.mem[i+0]
+            );
+        end
+    end
+
+    $fclose(fp);
+endtask
 
 /* verilator lint_off CASEINCOMPLETE */
 `include "dasm.svi"
