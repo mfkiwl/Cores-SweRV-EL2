@@ -26,6 +26,11 @@ jobs:
     needs: [Build-Verilator]
     uses: ./.github/workflows/test-verification.yml
 
+  Test-Microarchitectural:
+    name: Test-Microarchitectural
+    needs: [Build-Verilator]
+    uses: ./.github/workflows/test-uarch.yml
+
   Test-RISCV-DV:
     name: Test-RISCV-DV
     needs: [Build-Verilator, Build-Spike]
@@ -42,6 +47,9 @@ jobs:
     uses: ./.github/workflows/report-coverage.yml
 
   Publish-to-GH-Pages:
+    concurrency:
+      group: concurrency-group-${{ github.repository }}-publish
+      cancel-in-progress: false
     permissions:
       actions: write
       contents: write
