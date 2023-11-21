@@ -40,6 +40,18 @@ BUILD_DIR = snapshots/${snapshot}
 TBDIR = ${RV_ROOT}/testbench
 PICOLIBC_DIR = ${RV_ROOT}/third_party/picolibc/install
 
+# Determine verilator version if possible. Set the flag accordingly. Since
+# version v5.006 -Wno-IMPLICIT was renamed to -Wno-IMPLICITSTATIC
+VERILATOR_NOIMPLICIT := -Wno-IMPLICITSTATIC
+VERILATOR_VERSION    := $(subst .,,$(word 2,$(shell $(VERILATOR) --version)))
+
+ifeq ("$(.SHELLSTATUS)", "0")
+    $(shell test $(VERILATOR_VERSION) -lt 5006)
+    ifeq ("$(.SHELLSTATUS)", "0")
+        VERILATOR_NOIMPLICIT := -Wno-IMPLICIT
+    endif
+endif
+
 # Define test name
 TEST = hello_world
 TEST_DIR = ${TBDIR}/asm
@@ -108,8 +120,8 @@ all: clean verilator
 
 clean:
 	rm -rf *.log *.s *.hex *.dis *.tbl irun* vcs* simv* *.map snapshots veer* \
-	verilator* *.exe obj* *.o ucli.key vc_hdrs.h csrc *.csv work\
-	dataset.asdb  library.cfg vsimsa.cfg  riviera-build wave.asdb
+	verilator* *.exe obj* *.o *.sym ucli.key vc_hdrs.h csrc *.csv work \
+	dataset.asdb library.cfg vsimsa.cfg riviera-build wave.asdb
 
 
 
@@ -123,7 +135,8 @@ verilator-build: ${TBFILES} ${BUILD_DIR}/defines.h test_tb_top.cpp
 	echo '`undef RV_ASSERT_ON' >> ${BUILD_DIR}/common_defines.vh
 	$(VERILATOR)  --cc -CFLAGS ${CFLAGS} $(defines) \
 	  $(includes) -I${RV_ROOT}/testbench -f ${RV_ROOT}/testbench/flist \
-	  -Wno-WIDTH -Wno-UNOPTFLAT -Wno-IMPLICITSTATIC ${TBFILES} --top-module tb_top \
+	  -Wno-WIDTH -Wno-UNOPTFLAT $(VERILATOR_NOIMPLICIT) \
+	  ${TBFILES} --top-module tb_top \
 	  -exe test_tb_top.cpp --autoflush $(VERILATOR_DEBUG) $(VERILATOR_COVERAGE)
 	cp ${RV_ROOT}/testbench/test_tb_top.cpp obj_dir/
 	$(MAKE) -e -C obj_dir/ -f Vtb_top.mk $(VERILATOR_MAKE_FLAGS)

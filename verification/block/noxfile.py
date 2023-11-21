@@ -150,6 +150,14 @@ def pic_gw_verify(session, blockName, testName, coverage):
 
 
 @nox.session(tags=["tests"])
+@nox.parametrize("blockName", ["dec_tl"])
+@nox.parametrize("testName", ["test_dec_tl"])
+@nox.parametrize("coverage", "toggle")
+def dec_tl_verify(session, blockName, testName, coverage):
+    verify_block(session, blockName, testName, coverage)
+
+
+@nox.session(tags=["tests"])
 @nox.parametrize("blockName", ["dma"])
 @nox.parametrize(
     "testName",
@@ -174,6 +182,102 @@ def dma_verify(session, blockName, testName, coverage):
 @nox.parametrize("testName", ["test_compress"])
 @nox.parametrize("coverage", "toggle")  # No branches in the decompressor
 def ifu_compress_verify(session, blockName, testName, coverage):
+    verify_block(session, blockName, testName, coverage)
+
+
+@nox.session(tags=["tests"])
+@nox.parametrize("blockName", ["exu_alu"])
+@nox.parametrize(
+    "testName",
+    [
+        "test_arith",
+        "test_logic",
+    ],
+)
+@nox.parametrize("coverage", coverageTypes)
+def exu_alu_verify(session, blockName, testName, coverage):
+    verify_block(session, blockName, testName, coverage)
+
+
+@nox.session(tags=["tests"])
+@nox.parametrize("blockName", ["exu_mul"])
+@nox.parametrize(
+    "testName",
+    [
+        "test_mul",
+    ],
+)
+@nox.parametrize("coverage", coverageTypes)
+def exu_mul_verify(session, blockName, testName, coverage):
+    verify_block(session, blockName, testName, coverage)
+
+
+@nox.session(tags=["tests"])
+@nox.parametrize("blockName", ["exu_div"])
+@nox.parametrize(
+    "testName",
+    [
+        "test_div",
+    ],
+)
+@nox.parametrize("coverage", coverageTypes)
+def exu_div_verify(session, blockName, testName, coverage):
+    verify_block(session, blockName, testName, coverage)
+
+
+@nox.session(tags=["tests"])
+@nox.parametrize("blockName", ["iccm"])
+@nox.parametrize(
+    "testName",
+    [
+        "test_readwrite",
+    ],
+)
+@nox.parametrize("coverage", coverageTypes)
+def iccm_verify(session, blockName, testName, coverage):
+    verify_block(session, blockName, testName, coverage)
+
+
+@nox.session(tags=["tests"])
+@nox.parametrize("blockName", ["dccm"])
+@nox.parametrize(
+    "testName",
+    [
+        "test_readwrite",
+    ],
+)
+@nox.parametrize("coverage", coverageTypes)
+def dccm_verify(session, blockName, testName, coverage):
+    verify_block(session, blockName, testName, coverage)
+
+
+@nox.session(tags=["tests"])
+@nox.parametrize("blockName", ["lib_axi4_to_ahb"])
+@nox.parametrize(
+    "testName",
+    [
+        "test_axi",
+        "test_axi_read_channel",
+        "test_axi_write_channel",
+    ],
+)
+@nox.parametrize("coverage", coverageTypes)
+def lib_axi4_to_ahb_verify(session, blockName, testName, coverage):
+    verify_block(session, blockName, testName, coverage)
+
+
+@nox.session(tags=["tests"])
+@nox.parametrize("blockName", ["pmp"])
+@nox.parametrize(
+    "testName",
+    [
+        "test_xwr_access",
+        "test_address_matching",
+        "test_multiple_configs",
+    ],
+)
+@nox.parametrize("coverage", coverageTypes)
+def pmp_verify(session, blockName, testName, coverage):
     verify_block(session, blockName, testName, coverage)
 
 
