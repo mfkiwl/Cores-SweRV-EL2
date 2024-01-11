@@ -10,6 +10,9 @@ CURDIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 CFGDIR := $(abspath $(CURDIR)/snapshots/default)
 CONFIG := $(abspath $(CURDIR)/../../configs)
 
+# Set pythonpath so that tests can access common modules
+export PYTHONPATH := $(CURDIR)/common
+
 # Common sources
 COMMON_SOURCES  = $(CFGDIR)/common_defines.vh
 COMMON_SOURCES += $(CFGDIR)/el2_pdef.vh
@@ -44,7 +47,7 @@ endif
 COCOTB_HDL_TIMEUNIT         = 1ns
 COCOTB_HDL_TIMEPRECISION    = 10ps
 
-EXTRA_ARGS += -I$(CFGDIR)
+EXTRA_ARGS += -I$(CFGDIR) -Wno-DECLFILENAME
 
 # Build directory
 ifneq ($(COVERAGE_TYPE),)

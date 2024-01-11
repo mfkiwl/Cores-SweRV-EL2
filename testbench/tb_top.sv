@@ -795,6 +795,11 @@ veer_wrapper rvtop_wrapper (
     .dccm_bank_dout         (el2_mem_export.dccm_bank_dout),
     .dccm_bank_ecc          (el2_mem_export.dccm_bank_ecc),
 
+    .iccm_ecc_single_error  (),
+    .iccm_ecc_double_error  (),
+    .dccm_ecc_single_error  (),
+    .dccm_ecc_double_error  (),
+
 // remove mems DFT pins for opensource
     .ic_data_ext_in_pkt     ('0),
     .ic_tag_ext_in_pkt      ('0),
@@ -802,7 +807,14 @@ veer_wrapper rvtop_wrapper (
     .soft_int               ('0),
     .core_id                ('0),
     .scan_mode              ( 1'b0 ),         // To enable scan mode
-    .mbist_mode             ( 1'b0 )        // to enable mbist
+    .mbist_mode             ( 1'b0 ),        // to enable mbist
+
+    .dmi_uncore_enable      (),
+    .dmi_uncore_en          (),
+    .dmi_uncore_wr_en       (),
+    .dmi_uncore_addr        (),
+    .dmi_uncore_wdata       (),
+    .dmi_uncore_rdata       ()
 
 );
 
