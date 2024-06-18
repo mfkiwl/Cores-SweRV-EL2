@@ -121,9 +121,8 @@ defines += ${RV_ROOT}/design/include/el2_def.sv
 defines += $(BUILD_DIR)/el2_pdef.vh
 includes = -I${BUILD_DIR}
 
-# CFLAGS for verilator generated Makefiles. Without -std=c++11 it
-# complains for `auto` variables
-CFLAGS += -std=c++11
+# Verilator supports only C++14 and newer
+CFLAGS += -std=c++14
 
 # Optimization for better performance; alternative is nothing for
 # slower runtime (faster compiles) -O2 for faster runtime (slower
@@ -147,7 +146,7 @@ ${BUILD_DIR}/defines.h:
 	BUILD_PATH=${BUILD_DIR} ${RV_ROOT}/configs/veer.config -target=$(target) $(CONF_PARAMS)
 
 verilator-build: ${TBFILES} ${BUILD_DIR}/defines.h test_tb_top.cpp
-	$(VERILATOR)  --cc -CFLAGS ${CFLAGS} $(defines) \
+	$(VERILATOR)  --cc -CFLAGS "${CFLAGS}" $(defines) \
 	  $(includes) -I${RV_ROOT}/testbench -f ${RV_ROOT}/testbench/flist \
 	  -Wno-WIDTH -Wno-UNOPTFLAT $(VERILATOR_NOIMPLICIT) \
 	  ${TBFILES} --top-module tb_top \
