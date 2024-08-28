@@ -165,6 +165,14 @@ def dec_tl_verify(session, blockName, testName, coverage):
 
 
 @nox.session(tags=["tests"])
+@nox.parametrize("blockName", ["dec_ib"])
+@nox.parametrize("testName", ["test_dec_ib"])
+@nox.parametrize("coverage", "toggle")
+def dec_ib_verify(session, blockName, testName, coverage):
+    verify_block(session, blockName, testName, coverage)
+
+
+@nox.session(tags=["tests"])
 @nox.parametrize("blockName", ["dma"])
 @nox.parametrize(
     "testName",
@@ -317,6 +325,14 @@ def pmp_verify(session, blockName, testName, coverage):
 )
 @nox.parametrize("coverage", coverageTypes)
 def dmi_verify(session, blockName, testName, coverage):
+    verify_block(session, blockName, testName, coverage)
+
+
+@nox.session(tags=["tests"])
+@nox.parametrize("blockName", ["lsu_tl"])
+@nox.parametrize("testName", ["test_lsu_tl"])
+@nox.parametrize("coverage", "toggle")
+def lsu_tl_verify(session, blockName, testName, coverage):
     verify_block(session, blockName, testName, coverage)
 
 

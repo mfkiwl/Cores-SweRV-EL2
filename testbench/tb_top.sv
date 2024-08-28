@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2019 Western Digital Corporation or its affiliates.
-// Copyright (c) 2023 Antmicro <www.antmicro.com>
+// Copyright (c) 2024 Antmicro <www.antmicro.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,11 +16,15 @@
 //
 
 `ifndef VERILATOR
-module tb_top #(
+module tb_top
+    import tb_top_pkg::*;
+#(
     `include "el2_param.vh"
 );
 `else
-module tb_top #(
+module tb_top
+    import tb_top_pkg::*;
+#(
     `include "el2_param.vh"
 ) (
     input bit                   core_clk,
@@ -38,7 +42,10 @@ module tb_top #(
 `endif
     logic                       rst_l;
     logic                       porst_l;
+    logic [pt.PIC_TOTAL_INT:1]  ext_int;
     logic                       nmi_int;
+    logic                       timer_int;
+    logic                       soft_int;
 
     logic        [31:0]         reset_vector;
     logic        [31:0]         nmi_vector;
@@ -65,7 +72,21 @@ module tb_top #(
     logic        [63:0]         lsu_hrdata      ;
     logic        [63:0]         lsu_hwdata      ;
     logic                       lsu_hready      ;
-    logic                       lsu_hresp        ;
+    logic                       lsu_hresp       ;
+
+    logic        [31:0]         mux_haddr       ;
+    logic        [2:0]          mux_hburst      ;
+    logic                       mux_hmastlock   ;
+    logic        [3:0]          mux_hprot       ;
+    logic        [2:0]          mux_hsize       ;
+    logic        [1:0]          mux_htrans      ;
+    logic                       mux_hwrite      ;
+    logic                       mux_hsel        ;
+    logic        [63:0]         mux_hrdata      ;
+    logic        [63:0]         mux_hwdata      ;
+    logic                       mux_hready      ;
+    logic                       mux_hresp       ;
+    logic                        mux_hreadyout  ;
 
     logic        [31:0]         sb_haddr        ;
     logic        [2:0]          sb_hburst       ;
@@ -92,6 +113,11 @@ module tb_top #(
 
 
     logic                       jtag_tdo;
+    logic                       jtag_tck;
+    logic                       jtag_tms;
+    logic                       jtag_tdi;
+    logic                       jtag_trst_n;
+
     logic                       o_cpu_halt_ack;
     logic                       o_cpu_halt_status;
     logic                       o_cpu_run_ack;
@@ -125,9 +151,70 @@ module tb_top #(
     logic [11:0]                wb_csr_dest;
     logic [31:0]                wb_csr_data;
 
+   `ifdef RV_OPENOCD_TEST
+    // SB and LSU AHB master mux
+    ahb_lite_2to1_mux #(
+        .AHB_LITE_ADDR_WIDTH (32),
+        .AHB_LITE_DATA_WIDTH (64),
+        .AHB_NO_OPT(1) //Prevent address and data phase overlap between initiators
+    ) u_sb_lsu_ahb_mux (
+        .hclk                (core_clk),
+        .hreset_n            (rst_l),
+        .force_bus_idle      (),
+        // Initiator 0
+        .hsel_i_0            (1'b1      ),
+        .haddr_i_0           (lsu_haddr ),
+        .hwdata_i_0          (lsu_hwdata),
+        .hwrite_i_0          (lsu_hwrite),
+        .htrans_i_0          (lsu_htrans),
+        .hsize_i_0           (lsu_hsize ),
+        .hready_i_0          (lsu_hready),
+        .hresp_o_0           (lsu_hresp ),
+        .hready_o_0          (lsu_hready),
+        .hrdata_o_0          (lsu_hrdata),
+
+        // Initiator 1
+        .hsel_i_1            (1'b1      ),
+        .haddr_i_1           (sb_haddr  ),
+        .hwdata_i_1          (sb_hwdata ),
+        .hwrite_i_1          (sb_hwrite ),
+        .htrans_i_1          (sb_htrans ),
+        .hsize_i_1           (sb_hsize  ),
+        .hready_i_1          (sb_hready ),
+        .hresp_o_1           (sb_hresp  ),
+        .hready_o_1          (sb_hready ),
+        .hrdata_o_1          (sb_hrdata ),
+
+        // Responder
+        .hsel_o              (mux_hsel),
+        .haddr_o             (mux_haddr ),
+        .hwdata_o            (mux_hwdata),
+        .hwrite_o            (mux_hwrite),
+        .htrans_o            (mux_htrans),
+        .hsize_o             (mux_hsize ),
+        .hready_o            (mux_hready),
+        .hresp_i             (mux_hresp ),
+        .hreadyout_i         (mux_hreadyout),
+        .hrdata_i            (mux_hrdata)
+    );
+   `else
+   assign mux_hsel = 1'b1;
+   assign mux_haddr = lsu_haddr;
+   assign mux_hwdata = lsu_hwdata;
+   assign mux_hwrite = lsu_hwrite;
+   assign mux_htrans = lsu_htrans;
+   assign mux_hsize = lsu_hsize;
+   assign mux_hready = lsu_hready;
+
+   assign lsu_hresp = mux_hresp;
+   assign lsu_hrdata = mux_hrdata;
+   assign lsu_hready = mux_hreadyout;
+   `endif
+
 `ifdef RV_BUILD_AXI4
    //-------------------------- LSU AXI signals--------------------------
    // AXI Write Channels
+   parameter int                RV_MUX_BUS_TAG = (`RV_LSU_BUS_TAG > `RV_SB_BUS_TAG ? `RV_LSU_BUS_TAG : `RV_SB_BUS_TAG) + 1;
     wire                        lsu_axi_awvalid;
     wire                        lsu_axi_awready;
     wire [`RV_LSU_BUS_TAG-1:0]  lsu_axi_awid;
@@ -172,6 +259,11 @@ module tb_top #(
     wire [63:0]                 lsu_axi_rdata;
     wire [1:0]                  lsu_axi_rresp;
     wire                        lsu_axi_rlast;
+    wire                        lsu_axi_awuser;
+    wire                        lsu_axi_wuser;
+    wire                        lsu_axi_buser;
+    wire                        lsu_axi_aruser;
+    wire                        lsu_axi_ruser;
 
     //-------------------------- IFU AXI signals--------------------------
     // AXI Write Channels
@@ -266,6 +358,11 @@ module tb_top #(
     wire [63:0]                 sb_axi_rdata;
     wire [1:0]                  sb_axi_rresp;
     wire                        sb_axi_rlast;
+    wire                        sb_axi_awuser;
+    wire                        sb_axi_wuser;
+    wire                        sb_axi_buser;
+    wire                        sb_axi_aruser;
+    wire                        sb_axi_ruser;
 
    //-------------------------- DMA AXI signals--------------------------
    // AXI Write Channels
@@ -311,7 +408,7 @@ module tb_top #(
     wire                        lmem_axi_arready;
 
     wire                        lmem_axi_rvalid;
-    wire [`RV_LSU_BUS_TAG-1:0]  lmem_axi_rid;
+    wire [RV_MUX_BUS_TAG-1:0]   lmem_axi_rid;
     wire [1:0]                  lmem_axi_rresp;
     wire [63:0]                 lmem_axi_rdata;
     wire                        lmem_axi_rlast;
@@ -325,8 +422,261 @@ module tb_top #(
 
     wire [1:0]                  lmem_axi_bresp;
     wire                        lmem_axi_bvalid;
-    wire [`RV_LSU_BUS_TAG-1:0]  lmem_axi_bid;
+    wire [RV_MUX_BUS_TAG-1:0]   lmem_axi_bid;
     wire                        lmem_axi_bready;
+
+    wire                        mux_axi_awvalid;
+    wire                        mux_axi_awready;
+    wire [RV_MUX_BUS_TAG-1:0]   mux_axi_awid;
+    wire [31:0]                 mux_axi_awaddr;
+    wire [3:0]                  mux_axi_awregion;
+    wire [7:0]                  mux_axi_awlen;
+    wire [2:0]                  mux_axi_awsize;
+    wire [1:0]                  mux_axi_awburst;
+    wire                        mux_axi_awlock;
+    wire [3:0]                  mux_axi_awcache;
+    wire [2:0]                  mux_axi_awprot;
+    wire [3:0]                  mux_axi_awqos;
+
+    wire                        mux_axi_wvalid;
+    wire                        mux_axi_wready;
+    wire [63:0]                 mux_axi_wdata;
+    wire [7:0]                  mux_axi_wstrb;
+    wire                        mux_axi_wlast;
+
+    wire                        mux_axi_bvalid;
+    wire                        mux_axi_bready;
+    wire [1:0]                  mux_axi_bresp;
+    wire [RV_MUX_BUS_TAG-1:0]   mux_axi_bid;
+
+    // AXI Read Channels
+    wire                        mux_axi_arvalid;
+    wire                        mux_axi_arready;
+    wire [RV_MUX_BUS_TAG-1:0]   mux_axi_arid;
+    wire [31:0]                 mux_axi_araddr;
+    wire [3:0]                  mux_axi_arregion;
+    wire [7:0]                  mux_axi_arlen;
+    wire [2:0]                  mux_axi_arsize;
+    wire [1:0]                  mux_axi_arburst;
+    wire                        mux_axi_arlock;
+    wire [3:0]                  mux_axi_arcache;
+    wire [2:0]                  mux_axi_arprot;
+    wire [3:0]                  mux_axi_arqos;
+
+    wire                        mux_axi_rvalid;
+    wire                        mux_axi_rready;
+    wire [RV_MUX_BUS_TAG-1:0]   mux_axi_rid;
+    wire [63:0]                 mux_axi_rdata;
+    wire [1:0]                  mux_axi_rresp;
+    wire                        mux_axi_rlast;
+    wire                        mux_axi_awuser;
+    wire                        mux_axi_wuser;
+    wire                        mux_axi_buser;
+    wire                        mux_axi_aruser;
+    wire                        mux_axi_ruser;
+
+`ifdef RV_OPENOCD_TEST
+   axi_crossbar_wrap_2x1 #(
+        .ADDR_WIDTH (32),
+        .DATA_WIDTH (64),
+        .S_ID_WIDTH(RV_MUX_BUS_TAG - 1),
+        .M00_ADDR_WIDTH(32)
+    ) u_axi_crossbar (
+                      .clk(core_clk),
+                      .rst(!rst_l),
+
+                      // LSU
+                      .s00_axi_arvalid(lsu_axi_arvalid),
+                      .s00_axi_arready(lsu_axi_arready),
+                      .s00_axi_araddr(lsu_axi_araddr),
+                      .s00_axi_arid(lsu_axi_arid),
+                      .s00_axi_arlen(lsu_axi_arlen),
+                      .s00_axi_arburst(lsu_axi_arburst),
+                      .s00_axi_arsize(lsu_axi_arsize),
+
+                      .s00_axi_rvalid(lsu_axi_rvalid),
+                      .s00_axi_rready(lsu_axi_rready),
+                      .s00_axi_rdata(lsu_axi_rdata),
+                      .s00_axi_rresp(lsu_axi_rresp),
+                      .s00_axi_rid(lsu_axi_rid),
+                      .s00_axi_rlast(lsu_axi_rlast),
+
+                      .s00_axi_awvalid(lsu_axi_awvalid),
+                      .s00_axi_awready(lsu_axi_awready),
+                      .s00_axi_awaddr(lsu_axi_awaddr),
+                      .s00_axi_awid(lsu_axi_awid),
+                      .s00_axi_awlen(lsu_axi_awlen),
+                      .s00_axi_awburst(lsu_axi_awburst),
+                      .s00_axi_awlock(lsu_axi_awlock),
+                      .s00_axi_awcache(lsu_axi_awcache),
+                      .s00_axi_awprot(lsu_axi_awprot),
+                      .s00_axi_awqos(lsu_axi_awqos),
+                      .s00_axi_awuser(lsu_axi_awuser),
+                      .s00_axi_wlast(lsu_axi_wlast),
+                      .s00_axi_wuser(lsu_axi_wuser),
+                      .s00_axi_buser(lsu_axi_buser),
+                      .s00_axi_arlock(lsu_axi_arlock),
+                      .s00_axi_arcache(lsu_axi_arcache),
+                      .s00_axi_arprot(lsu_axi_arprot),
+                      .s00_axi_arqos(lsu_axi_arqos),
+                      .s00_axi_aruser(lsu_axi_aruser),
+                      .s00_axi_ruser(lsu_axi_ruser),
+                      .s00_axi_awsize(lsu_axi_awsize),
+
+                      .s00_axi_wdata(lsu_axi_wdata),
+                      .s00_axi_wstrb(lsu_axi_wstrb),
+                      .s00_axi_wvalid(lsu_axi_wvalid),
+                      .s00_axi_wready(lsu_axi_wready),
+
+                      .s00_axi_bvalid(lsu_axi_bvalid),
+                      .s00_axi_bready(lsu_axi_bready),
+                      .s00_axi_bresp(lsu_axi_bresp),
+                      .s00_axi_bid(lsu_axi_bid),
+
+                      // SB
+                      .s01_axi_arvalid(sb_axi_arvalid),
+                      .s01_axi_arready(sb_axi_arready),
+                      .s01_axi_araddr(sb_axi_araddr),
+                      .s01_axi_arid(sb_axi_arid),
+                      .s01_axi_arlen(sb_axi_arlen),
+                      .s01_axi_arburst(sb_axi_arburst),
+                      .s01_axi_arsize(sb_axi_arsize),
+
+                      .s01_axi_rvalid(sb_axi_rvalid),
+                      .s01_axi_rready(sb_axi_rready),
+                      .s01_axi_rdata(sb_axi_rdata),
+                      .s01_axi_rresp(sb_axi_rresp),
+                      .s01_axi_rid(sb_axi_rid),
+                      .s01_axi_rlast(sb_axi_rlast),
+
+                      .s01_axi_awvalid(sb_axi_awvalid),
+                      .s01_axi_awready(sb_axi_awready),
+                      .s01_axi_awaddr(sb_axi_awaddr),
+                      .s01_axi_awid(sb_axi_awid),
+                      .s01_axi_awlen(sb_axi_awlen),
+                      .s01_axi_awburst(sb_axi_awburst),
+                      .s01_axi_awlock(sb_axi_awlock),
+                      .s01_axi_awcache(sb_axi_awcache),
+                      .s01_axi_awprot(sb_axi_awprot),
+                      .s01_axi_awqos(sb_axi_awqos),
+                      .s01_axi_awuser(sb_axi_awuser),
+                      .s01_axi_wlast(sb_axi_wlast),
+                      .s01_axi_wuser(sb_axi_wuser),
+                      .s01_axi_buser(sb_axi_buser),
+                      .s01_axi_arlock(sb_axi_arlock),
+                      .s01_axi_arcache(sb_axi_arcache),
+                      .s01_axi_arprot(sb_axi_arprot),
+                      .s01_axi_arqos(sb_axi_arqos),
+                      .s01_axi_aruser(sb_axi_aruser),
+                      .s01_axi_ruser(sb_axi_ruser),
+                      .s01_axi_awsize(sb_axi_awsize),
+
+                      .s01_axi_wdata(sb_axi_wdata),
+                      .s01_axi_wstrb(sb_axi_wstrb),
+                      .s01_axi_wvalid(sb_axi_wvalid),
+                      .s01_axi_wready(sb_axi_wready),
+
+                      .s01_axi_bvalid(sb_axi_bvalid),
+                      .s01_axi_bready(sb_axi_bready),
+                      .s01_axi_bresp(sb_axi_bresp),
+                      .s01_axi_bid(sb_axi_bid),
+
+                      // Output
+                      .m00_axi_arvalid(mux_axi_arvalid),
+                      .m00_axi_arready(mux_axi_arready),
+                      .m00_axi_araddr(mux_axi_araddr),
+                      .m00_axi_arid(mux_axi_arid),
+                      .m00_axi_arlen(mux_axi_arlen),
+                      .m00_axi_arburst(mux_axi_arburst),
+                      .m00_axi_arsize(mux_axi_arsize),
+
+                      .m00_axi_rvalid(mux_axi_rvalid),
+                      .m00_axi_rready(mux_axi_rready),
+                      .m00_axi_rdata(mux_axi_rdata),
+                      .m00_axi_rresp(mux_axi_rresp),
+                      .m00_axi_rid(mux_axi_rid),
+                      .m00_axi_rlast(mux_axi_rlast),
+
+                      .m00_axi_awvalid(mux_axi_awvalid),
+                      .m00_axi_awready(mux_axi_awready),
+                      .m00_axi_awaddr(mux_axi_awaddr),
+                      .m00_axi_awid(mux_axi_awid),
+                      .m00_axi_awlen(mux_axi_awlen),
+                      .m00_axi_awburst(mux_axi_awburst),
+                      .m00_axi_awlock(mux_axi_awlock),
+                      .m00_axi_awcache(mux_axi_awcache),
+                      .m00_axi_awprot(mux_axi_awprot),
+                      .m00_axi_awqos(mux_axi_awqos),
+                      .m00_axi_awuser(mux_axi_awuser),
+                      .m00_axi_wlast(mux_axi_wlast),
+                      .m00_axi_wuser(mux_axi_wuser),
+                      .m00_axi_buser(mux_axi_buser),
+                      .m00_axi_arlock(mux_axi_arlock),
+                      .m00_axi_arcache(mux_axi_arcache),
+                      .m00_axi_arprot(mux_axi_arprot),
+                      .m00_axi_arqos(mux_axi_arqos),
+                      .m00_axi_aruser(mux_axi_aruser),
+                      .m00_axi_ruser(mux_axi_ruser),
+                      .m00_axi_awsize(mux_axi_awsize),
+
+                      .m00_axi_wdata(mux_axi_wdata),
+                      .m00_axi_wstrb(mux_axi_wstrb),
+                      .m00_axi_wvalid(mux_axi_wvalid),
+                      .m00_axi_wready(mux_axi_wready),
+
+                      .m00_axi_bvalid(mux_axi_bvalid),
+                      .m00_axi_bready(mux_axi_bready),
+                      .m00_axi_bresp(mux_axi_bresp),
+                      .m00_axi_bid(mux_axi_bid),
+                      .m00_axi_awregion(mux_axi_awregion),
+                      .m00_axi_arregion(mux_axi_arregion)
+    );
+`else
+   assign mux_axi_arvalid = lsu_axi_arvalid;
+   assign lsu_axi_arready = mux_axi_arready;
+   assign mux_axi_araddr = lsu_axi_araddr;
+   assign mux_axi_arid = lsu_axi_arid;
+   assign mux_axi_arlen = lsu_axi_arlen;
+   assign mux_axi_arburst = lsu_axi_arburst;
+   assign mux_axi_arsize = lsu_axi_arsize;
+   assign lsu_axi_rvalid = mux_axi_rvalid;
+   assign mux_axi_rready = lsu_axi_rready;
+   assign lsu_axi_rdata = mux_axi_rdata;
+   assign lsu_axi_rresp = mux_axi_rresp;
+   assign lsu_axi_rid = mux_axi_rid;
+   assign lsu_axi_rlast = mux_axi_rlast;
+   assign mux_axi_awvalid = lsu_axi_awvalid;
+   assign lsu_axi_awready = mux_axi_awready;
+   assign mux_axi_awaddr = lsu_axi_awaddr;
+   assign mux_axi_awid = lsu_axi_awid;
+   assign mux_axi_awlen = lsu_axi_awlen;
+   assign mux_axi_awburst = lsu_axi_awburst;
+   assign mux_axi_awlock = lsu_axi_awlock;
+   assign mux_axi_awcache = lsu_axi_awcache;
+   assign mux_axi_awprot = lsu_axi_awprot;
+   assign mux_axi_awqos = lsu_axi_awqos;
+   assign mux_axi_awuser = lsu_axi_awuser;
+   assign mux_axi_wlast = lsu_axi_wlast;
+   assign mux_axi_wuser = lsu_axi_wuser;
+   assign lsu_axi_buser = mux_axi_buser;
+   assign mux_axi_arlock = lsu_axi_arlock;
+   assign mux_axi_arcache = lsu_axi_arcache;
+   assign mux_axi_arprot = lsu_axi_arprot;
+   assign mux_axi_arqos = lsu_axi_arqos;
+   assign mux_axi_aruser = lsu_axi_aruser;
+   assign lsu_axi_ruser = mux_axi_ruser;
+   assign mux_axi_awsize = lsu_axi_awsize;
+   assign mux_axi_wdata = lsu_axi_wdata;
+   assign mux_axi_wstrb = lsu_axi_wstrb;
+   assign mux_axi_wvalid = lsu_axi_wvalid;
+   assign lsu_axi_wready = mux_axi_wready;
+   assign lsu_axi_bvalid = mux_axi_bvalid;
+   assign mux_axi_bready = lsu_axi_bready;
+   assign lsu_axi_bresp = mux_axi_bresp;
+   assign lsu_axi_bid = mux_axi_bid;
+   assign mux_axi_awregion = lsu_axi_awregion;
+   assign mux_axi_arregion = lsu_axi_arregion;
+`endif
 
 `endif
     string                      abi_reg[32]; // ABI register names
@@ -336,6 +686,8 @@ module tb_top #(
     logic [pt.ICCM_NUM_BANKS-1:0][                   38:0] iccm_bank_fdout;
     logic [pt.DCCM_NUM_BANKS-1:0][pt.DCCM_FDATA_WIDTH-1:0] dccm_wr_fdata_bank;
     logic [pt.DCCM_NUM_BANKS-1:0][pt.DCCM_FDATA_WIDTH-1:0] dccm_bank_fdout;
+
+    tb_top_pkg::veer_sram_error_injection_mode_t error_injection_mode;
 
 `define DEC rvtop_wrapper.rvtop.veer.dec
 
@@ -366,6 +718,59 @@ module tb_top #(
             $fwrite(fd,"%c", mailbox_data[7:0]);
             $write("%c", mailbox_data[7:0]);
         end
+        // Interrupt signals control
+        // data[7:0] == 0x80 - clear ext irq line index given by data[15:8]
+        // data[7:0] == 0x81 - set ext irq line index given by data[15:8]
+        // data[7:0] == 0x82 - clean NMI, timer and soft irq lines to bits data[8:10]
+        // data[7:0] == 0x83 - set NMI, timer and soft irq lines to bits data[8:10]
+        // data[7:0] == 0x90 - clear all interrupt request signals
+        if(mailbox_write && (mailbox_data[7:0] >= 8'h80 && mailbox_data[7:0] < 8'h84)) begin
+            if (mailbox_data[7:0] == 8'h80) begin
+                if (mailbox_data[15:8] > 0 && mailbox_data[15:8] < pt.PIC_TOTAL_INT)
+                    ext_int[mailbox_data[15:8]] <= 1'b0;
+            end
+            if (mailbox_data[7:0] == 8'h81) begin
+                if (mailbox_data[15:8] > 0 && mailbox_data[15:8] < pt.PIC_TOTAL_INT)
+                    ext_int[mailbox_data[15:8]] <= 1'b1;
+            end
+            if (mailbox_data[7:0] == 8'h82) begin
+                nmi_int   <= nmi_int   & ~mailbox_data[8];
+                timer_int <= timer_int & ~mailbox_data[9];
+                soft_int  <= soft_int  & ~mailbox_data[10];
+            end
+            if (mailbox_data[7:0] == 8'h83) begin
+                nmi_int   <= nmi_int   |  mailbox_data[8];
+                timer_int <= timer_int |  mailbox_data[9];
+                soft_int  <= soft_int  |  mailbox_data[10];
+            end
+        end
+        if(mailbox_write && (mailbox_data[7:0] == 8'h90)) begin
+            ext_int   <= {pt.PIC_TOTAL_INT-1{1'b0}};
+            nmi_int   <= 1'b0;
+            timer_int <= 1'b0;
+            soft_int  <= 1'b0;
+        end
+        // ECC error injection
+        if(mailbox_write && (mailbox_data[7:0] == 8'he0)) begin
+            $display("Injecting single bit ICCM error");
+            error_injection_mode.iccm_single_bit_error <= 1'b1;
+        end
+        else if(mailbox_write && (mailbox_data[7:0] == 8'he1)) begin
+            $display("Injecting double bit ICCM error");
+            error_injection_mode.iccm_double_bit_error <= 1'b1;
+        end
+        else if(mailbox_write && (mailbox_data[7:0] == 8'he2)) begin
+            $display("Injecting single bit DCCM error");
+            error_injection_mode.dccm_single_bit_error <= 1'b1;
+        end
+        else if(mailbox_write && (mailbox_data[7:0] == 8'he3)) begin
+            $display("Injecting double bit DCCM error");
+            error_injection_mode.dccm_double_bit_error <= 1'b1;
+        end
+        else if(mailbox_write && (mailbox_data[7:0] == 8'he4)) begin
+            $display("Disable ECC error injection");
+            error_injection_mode <= '0;
+        end
         // Memory signature dump
         if(mailbox_write && (mailbox_data[7:0] == 8'hFF || mailbox_data[7:0] == 8'h01)) begin
             if (mem_signature_begin < mem_signature_end) begin
@@ -377,6 +782,9 @@ module tb_top #(
             $display("TEST_PASSED");
             $display("\nFinished : minstret = %0d, mcycle = %0d", `DEC.tlu.minstretl[31:0],`DEC.tlu.mcyclel[31:0]);
             $display("See \"exec.log\" for execution trace with register updates..\n");
+            // OpenOCD test breaks if simulation closes the TCP connection first.
+            // This delay allows OpenOCD to close the connection before the #finish.
+            #15000;
             $finish;
         end
         else if(mailbox_write && mailbox_data[7:0] == 8'h1) begin
@@ -384,7 +792,6 @@ module tb_top #(
             $finish;
         end
     end
-
 
     // trace monitor
     always @(posedge core_clk) begin
@@ -452,13 +859,18 @@ module tb_top #(
         abi_reg[29] = "t4";
         abi_reg[30] = "t5";
         abi_reg[31] = "t6";
+
+        ext_int     = {pt.PIC_TOTAL_INT-1{1'b0}};
+        nmi_int     = 0;
+        timer_int   = 0;
+        soft_int    = 0;
+
     // tie offs
         jtag_id[31:28] = 4'b1;
         jtag_id[27:12] = '0;
         jtag_id[11:1]  = 11'h45;
         reset_vector = `RV_RESET_VEC;
         nmi_vector   = 32'hee000000;
-        nmi_int   = 0;
 
         $readmemh("program.hex",  lmem.mem);
         $readmemh("program.hex",  imem.mem);
@@ -736,8 +1148,9 @@ veer_wrapper rvtop_wrapper (
     .dma_axi_rresp          (dma_axi_rresp),
     .dma_axi_rlast          (dma_axi_rlast),
 `endif
-    .timer_int              ( 1'b0     ),
-    .extintsrc_req          ( '0  ),
+    .timer_int              ( timer_int ),
+    .soft_int               ( soft_int ),
+    .extintsrc_req          ( ext_int ),
 
     .lsu_bus_clk_en         ( 1'b1  ),// Clock ratio b/w cpu core clk & AHB master interface
     .ifu_bus_clk_en         ( 1'b1  ),// Clock ratio b/w cpu core clk & AHB master interface
@@ -752,11 +1165,12 @@ veer_wrapper rvtop_wrapper (
     .trace_rv_i_interrupt_ip(trace_rv_i_interrupt_ip),
     .trace_rv_i_tval_ip     (trace_rv_i_tval_ip),
 
-    .jtag_tck               ( 1'b0  ),
-    .jtag_tms               ( 1'b0  ),
-    .jtag_tdi               ( 1'b0  ),
-    .jtag_trst_n            ( 1'b0  ),
-    .jtag_tdo               ( jtag_tdo ),
+    .jtag_tck               (jtag_tck),
+    .jtag_tms               (jtag_tms),
+    .jtag_tdi               (jtag_tdi),
+    .jtag_trst_n            (jtag_trst_n),
+    .jtag_tdo               (jtag_tdo),
+    .jtag_tdoEn             (),
 
     .mpc_debug_halt_ack     ( mpc_debug_halt_ack),
     .mpc_debug_halt_req     ( 1'b0),
@@ -804,7 +1218,6 @@ veer_wrapper rvtop_wrapper (
     .ic_data_ext_in_pkt     ('0),
     .ic_tag_ext_in_pkt      ('0),
 
-    .soft_int               ('0),
     .core_id                ('0),
     .scan_mode              ( 1'b0 ),         // To enable scan mode
     .mbist_mode             ( 1'b0 ),        // to enable mbist
@@ -847,22 +1260,22 @@ ahb_sif imem (
 
 ahb_sif lmem (
      // Inputs
-     .HWDATA(lsu_hwdata),
+     .HWDATA(mux_hwdata),
      .HCLK(core_clk),
-     .HSEL(1'b1),
-     .HPROT(lsu_hprot),
-     .HWRITE(lsu_hwrite),
-     .HTRANS(lsu_htrans),
-     .HSIZE(lsu_hsize),
-     .HREADY(lsu_hready),
+     .HSEL(mux_hsel),
+     .HPROT(mux_hprot),
+     .HWRITE(mux_hwrite),
+     .HTRANS(mux_htrans),
+     .HSIZE(mux_hsize),
+     .HREADY(mux_hready),
      .HRESETn(rst_l),
-     .HADDR(lsu_haddr),
-     .HBURST(lsu_hburst),
+     .HADDR(mux_haddr),
+     .HBURST(mux_hburst),
 
      // Outputs
-     .HREADYOUT(lsu_hready),
-     .HRESP(lsu_hresp),
-     .HRDATA(lsu_hrdata[63:0])
+     .HREADYOUT(mux_hreadyout),
+     .HRESP(mux_hresp),
+     .HRDATA(mux_hrdata[63:0])
 );
 
 `endif
@@ -904,7 +1317,7 @@ axi_slv #(.TAGW(`RV_IFU_BUS_TAG)) imem(
     .bid()
 );
 
-defparam lmem.TAGW =`RV_LSU_BUS_TAG;
+defparam lmem.TAGW = RV_MUX_BUS_TAG;
 
 //axi_slv #(.TAGW(`RV_LSU_BUS_TAG)) lmem(
 axi_slv  lmem(
@@ -912,11 +1325,11 @@ axi_slv  lmem(
     .rst_l(rst_l),
     .arvalid(lmem_axi_arvalid),
     .arready(lmem_axi_arready),
-    .araddr(lsu_axi_araddr),
-    .arid(lsu_axi_arid),
-    .arlen(lsu_axi_arlen),
-    .arburst(lsu_axi_arburst),
-    .arsize(lsu_axi_arsize),
+    .araddr(mux_axi_araddr),
+    .arid(mux_axi_arid),
+    .arlen(mux_axi_arlen),
+    .arburst(mux_axi_arburst),
+    .arsize(mux_axi_arsize),
 
     .rvalid(lmem_axi_rvalid),
     .rready(lmem_axi_rready),
@@ -927,14 +1340,14 @@ axi_slv  lmem(
 
     .awvalid(lmem_axi_awvalid),
     .awready(lmem_axi_awready),
-    .awaddr(lsu_axi_awaddr),
-    .awid(lsu_axi_awid),
-    .awlen(lsu_axi_awlen),
-    .awburst(lsu_axi_awburst),
-    .awsize(lsu_axi_awsize),
+    .awaddr(mux_axi_awaddr),
+    .awid(mux_axi_awid),
+    .awlen(mux_axi_awlen),
+    .awburst(mux_axi_awburst),
+    .awsize(mux_axi_awsize),
 
-    .wdata(lsu_axi_wdata),
-    .wstrb(lsu_axi_wstrb),
+    .wdata(mux_axi_wdata),
+    .wstrb(mux_axi_wstrb),
     .wvalid(lmem_axi_wvalid),
     .wready(lmem_axi_wready),
 
@@ -944,34 +1357,34 @@ axi_slv  lmem(
     .bid(lmem_axi_bid)
 );
 
-axi_lsu_dma_bridge # (`RV_LSU_BUS_TAG,`RV_LSU_BUS_TAG ) bridge(
+axi_lsu_dma_bridge # (RV_MUX_BUS_TAG, RV_MUX_BUS_TAG) bridge(
     .clk(core_clk),
     .reset_l(rst_l),
 
-    .m_arvalid(lsu_axi_arvalid),
-    .m_arid(lsu_axi_arid),
-    .m_araddr(lsu_axi_araddr),
-    .m_arready(lsu_axi_arready),
+    .m_arvalid(mux_axi_arvalid),
+    .m_arid(mux_axi_arid),
+    .m_araddr(mux_axi_araddr),
+    .m_arready(mux_axi_arready),
 
-    .m_rvalid(lsu_axi_rvalid),
-    .m_rready(lsu_axi_rready),
-    .m_rdata(lsu_axi_rdata),
-    .m_rid(lsu_axi_rid),
-    .m_rresp(lsu_axi_rresp),
-    .m_rlast(lsu_axi_rlast),
+    .m_rvalid(mux_axi_rvalid),
+    .m_rready(mux_axi_rready),
+    .m_rdata(mux_axi_rdata),
+    .m_rid(mux_axi_rid),
+    .m_rresp(mux_axi_rresp),
+    .m_rlast(mux_axi_rlast),
 
-    .m_awvalid(lsu_axi_awvalid),
-    .m_awid(lsu_axi_awid),
-    .m_awaddr(lsu_axi_awaddr),
-    .m_awready(lsu_axi_awready),
+    .m_awvalid(mux_axi_awvalid),
+    .m_awid(mux_axi_awid),
+    .m_awaddr(mux_axi_awaddr),
+    .m_awready(mux_axi_awready),
 
-    .m_wvalid(lsu_axi_wvalid),
-    .m_wready(lsu_axi_wready),
+    .m_wvalid(mux_axi_wvalid),
+    .m_wready(mux_axi_wready),
 
-    .m_bresp(lsu_axi_bresp),
-    .m_bvalid(lsu_axi_bvalid),
-    .m_bid(lsu_axi_bid),
-    .m_bready(lsu_axi_bready),
+    .m_bresp(mux_axi_bresp),
+    .m_bvalid(mux_axi_bvalid),
+    .m_bid(mux_axi_bid),
+    .m_bready(mux_axi_bready),
 
     .s0_arvalid(lmem_axi_arvalid),
     .s0_arready(lmem_axi_arready),
@@ -1083,13 +1496,8 @@ endtask
 
 
 
-`ifdef VERILATOR
-`define DRAM(bk) Gen_dccm_enable.dccm_loop[bk].ram.ram_core
-`define IRAM(bk) Gen_iccm_enable.iccm_loop[bk].iccm_bank.ram_core
-`else
 `define DRAM(bk) Gen_dccm_enable.dccm_loop[bk].dccm.dccm_bank.ram_core
 `define IRAM(bk) Gen_iccm_enable.iccm_loop[bk].iccm.iccm_bank.ram_core
-`endif
 
 
 task slam_dccm_ram(input [31:0] addr, input[38:0] data);
@@ -1298,29 +1706,23 @@ if (pt.DCCM_ENABLE == 1) begin: Gen_dccm_enable
                                             .BC1     (1'b0   ), \
                                             .BC2     (1'b0   ), \
 
+    logic [pt.DCCM_NUM_BANKS-1:0] [pt.DCCM_FDATA_WIDTH-1:0] dccm_wdata_bitflip;
+    int ii;
     localparam DCCM_INDEX_DEPTH = ((pt.DCCM_SIZE)*1024)/((pt.DCCM_BYTE_WIDTH)*(pt.DCCM_NUM_BANKS));  // Depth of memory bank
     // 8 Banks, 16KB each (2048 x 72)
+    always_ff @(el2_mem_export.clk) begin : inject_dccm_ecc_error
+        if (~error_injection_mode.dccm_single_bit_error && ~error_injection_mode.dccm_double_bit_error) begin
+            dccm_wdata_bitflip <= '{default:0};
+        end else if (el2_mem_export.dccm_clken & el2_mem_export.dccm_wren_bank) begin
+            for (ii=0; ii<pt.DCCM_NUM_BANKS; ii++) begin: dccm_bitflip_injection_loop
+                dccm_wdata_bitflip[ii] <= get_bitflip_mask(error_injection_mode.dccm_double_bit_error);
+            end
+        end
+    end
     for (genvar i=0; i<pt.DCCM_NUM_BANKS; i++) begin: dccm_loop
-        assign dccm_wr_fdata_bank[i][pt.DCCM_DATA_WIDTH-1:0] = el2_mem_export.dccm_wr_data_bank[i];
-        assign dccm_wr_fdata_bank[i][pt.DCCM_FDATA_WIDTH-1:pt.DCCM_DATA_WIDTH] = el2_mem_export.dccm_wr_ecc_bank[i];
-        assign {el2_mem_export.dccm_bank_ecc[i], el2_mem_export.dccm_bank_dout[i]} = dccm_bank_fdout[i];
-
-    `ifdef VERILATOR
-
-            el2_ram #(DCCM_INDEX_DEPTH,39)  ram (
-                                    // Primary ports
-                                    .ME(el2_mem_export.dccm_clken[i]),
-                                    .CLK(el2_mem_export.clk),
-                                    .WE(el2_mem_export.dccm_wren_bank[i]),
-                                    .ADR(el2_mem_export.dccm_addr_bank[i]),
-                                    .D(dccm_wr_fdata_bank[i][pt.DCCM_FDATA_WIDTH-1:0]),
-                                    .Q(dccm_bank_fdout[i][pt.DCCM_FDATA_WIDTH-1:0]),
-                                    .ROP ( ),
-                                    // These are used by SoC
-                                    `EL2_LOCAL_DCCM_RAM_TEST_PORTS
-                                    .*
-                                    );
-    `else
+        assign dccm_wr_fdata_bank[i][pt.DCCM_FDATA_WIDTH-1:0] = {el2_mem_export.dccm_wr_ecc_bank[i], el2_mem_export.dccm_wr_data_bank[i]} ^ dccm_wdata_bitflip[i];
+        assign el2_mem_export.dccm_bank_dout[i] = dccm_bank_fdout[i][31:0];
+        assign el2_mem_export.dccm_bank_ecc[i] = dccm_bank_fdout[i][38:32];
 
         if (DCCM_INDEX_DEPTH == 32768) begin : dccm
             ram_32768x39  dccm_bank (
@@ -1472,7 +1874,6 @@ if (pt.DCCM_ENABLE == 1) begin: Gen_dccm_enable
                                     .*
                                     );
         end
-    `endif
     end : dccm_loop
 end :Gen_dccm_enable
 
@@ -1480,35 +1881,22 @@ end :Gen_dccm_enable
 // ICCM
 //
 if (pt.ICCM_ENABLE) begin : Gen_iccm_enable
+
+logic [pt.ICCM_NUM_BANKS-1:0] [38:0] iccm_wdata_bitflip;
+int jj;
+always_ff @(el2_mem_export.clk) begin : inject_iccm_ecc_error
+    if (~error_injection_mode.iccm_single_bit_error && ~error_injection_mode.iccm_double_bit_error) begin
+        iccm_wdata_bitflip <= '{default:0};
+    end else if (el2_mem_export.iccm_clken & el2_mem_export.iccm_wren_bank) begin
+        for (jj=0; jj<pt.ICCM_NUM_BANKS; jj++) begin: iccm_bitflip_injection_loop
+            iccm_wdata_bitflip[jj] <= get_bitflip_mask(error_injection_mode.iccm_double_bit_error);
+        end
+    end
+end
 for (genvar i=0; i<pt.ICCM_NUM_BANKS; i++) begin: iccm_loop
-    assign iccm_bank_wr_fdata[i][31:0] = el2_mem_export.iccm_bank_wr_data[i];
-    assign iccm_bank_wr_fdata[i][37:32] = el2_mem_export.iccm_bank_wr_ecc[i];
-    assign {el2_mem_export.iccm_bank_ecc[i], el2_mem_export.iccm_bank_dout[i]} = iccm_bank_fdout[i];
-
- `ifdef VERILATOR
-
-    el2_ram #(.depth(1<<pt.ICCM_INDEX_BITS), .width(39)) iccm_bank (
-                                     // Primary ports
-                                     .ME(el2_mem_export.iccm_clken[i]),
-                                     .CLK(el2_mem_export.clk),
-                                     .WE(el2_mem_export.iccm_wren_bank[i]),
-                                     .ADR(el2_mem_export.iccm_addr_bank[i]),
-                                     .D(iccm_bank_wr_fdata[i][38:0]),
-                                     .Q(iccm_bank_fdout[i][38:0]),
-                                     .ROP ( ),
-                                     // These are used by SoC
-                                     .TEST1    (1'b0   ),
-                                     .RME      (1'b0   ),
-                                     .RM       (4'b0000),
-                                     .LS       (1'b0   ),
-                                     .DS       (1'b0   ),
-                                     .SD       (1'b0   ) ,
-                                     .TEST_RNM (1'b0   ),
-                                     .BC1      (1'b0   ),
-                                     .BC2      (1'b0   )
-
-                                      );
- `else
+    assign iccm_bank_wr_fdata[i][32+pt.ICCM_ECC_WIDTH-1:0] = {el2_mem_export.iccm_bank_wr_ecc[i], el2_mem_export.iccm_bank_wr_data[i]} ^ iccm_wdata_bitflip[i];
+    assign el2_mem_export.iccm_bank_dout[i] = iccm_bank_fdout[i][31:0];
+    assign el2_mem_export.iccm_bank_ecc[i] = iccm_bank_fdout[i][32+pt.ICCM_ECC_WIDTH-1:32];
 
      if (pt.ICCM_INDEX_BITS == 6 ) begin : iccm
                ram_64x39 iccm_bank (
@@ -1742,9 +2130,24 @@ for (genvar i=0; i<pt.ICCM_NUM_BANKS; i++) begin: iccm_loop
 
                                       );
      end // block: iccm
-`endif
 end : iccm_loop
 end : Gen_iccm_enable
+
+`ifdef RV_OPENOCD_TEST
+jtagdpi #(
+    .Name           ("jtag0"),
+    .ListenPort     (5000)
+) jtagdpi (
+    .clk_i          (core_clk),
+    .rst_ni         (rst_l),
+    .jtag_tck       (jtag_tck),
+    .jtag_tms       (jtag_tms),
+    .jtag_tdi       (jtag_tdi),
+    .jtag_tdo       (jtag_tdo),
+    .jtag_trst_n    (jtag_trst_n),
+    .jtag_srst_n    ()
+);
+`endif
 
 /* verilator lint_off CASEINCOMPLETE */
 `include "dasm.svi"

@@ -1,3 +1,5 @@
+GCC_PREFIX     ?= riscv64-unknown-elf
+
 RISCV_DV_PATH   = $(RV_ROOT)/third_party/riscv-dv
 RISCV_DV_SIM   ?= pyflow
 RISCV_DV_ISS   ?= spike
@@ -6,13 +8,24 @@ RISCV_DV_SEED  ?= 999
 RISCV_DV_ITER  ?= 1
 RISCV_DV_BATCH ?= 1
 
+export RISCV_GCC ?=     $(GCC_PREFIX)-gcc
+export RISCV_OBJCOPY ?= $(GCC_PREFIX)-objcopy
+export RISCV_NM ?=      $(GCC_PREFIX)-nm
+
 WORK_DIR       ?= work
 TEST_DIR        = $(WORK_DIR)/test_$(RISCV_DV_TEST)
 SIM_DIR         = $(TEST_DIR)/hdl_sim
 
+ifeq ($(findstring u, $(RISCV_DV_PRIV)), u)
+	VEER_EXTRA_CONF = "-set=user_mode=1 -set=smepmp=1"
+else
+	VEER_EXTRA_CONF = ""
+endif
+
 VEER_TARGET     = default
 VEER_CONF       = -set build_axi4 \
-                  -set reset_vec=0x80000000
+                  -set reset_vec=0x80000000 \
+                  $(VEER_EXTRA_CONF)
 
 # Coverage reporting
 ifeq ("$(COVERAGE)", "all")
@@ -34,9 +47,22 @@ VERILATOR_EXE   = $(RV_ROOT)/testbench/test_tb_top.cpp
 
 HDL_FILES = $(WORK_DIR)/common_defines.vh \
             $(WORK_DIR)/el2_pdef.vh \
+            $(RV_ROOT)/testbench/tb_top_pkg.sv \
             $(RV_ROOT)/testbench/tb_top.sv \
             $(RV_ROOT)/testbench/ahb_sif.sv \
             $(RV_ROOT)/design/include/el2_def.sv
+
+# Determine verilator version if possible. Set the flag accordingly. Since
+# version v5.006 -Wno-IMPLICIT was renamed to -Wno-IMPLICITSTATIC
+VERILATOR_NOIMPLICIT := -Wno-IMPLICITSTATIC
+VERILATOR_VERSION    := $(subst .,,$(word 2,$(shell $(VERILATOR) --version)))
+
+ifeq ("$(.SHELLSTATUS)", "0")
+    $(shell test $(VERILATOR_VERSION) -lt 5006)
+    ifeq ("$(.SHELLSTATUS)", "0")
+        VERILATOR_NOIMPLICIT := -Wno-IMPLICIT
+    endif
+endif
 
 # riscv-dv args
 RISCV_DV_ARGS = \
@@ -47,10 +73,15 @@ RISCV_DV_ARGS = \
     --start_seed $(RISCV_DV_SEED) \
     --iterations $(RISCV_DV_ITER) \
     --batch_size $(RISCV_DV_BATCH) \
-    --isa rv32imc --mabi ilp32 \
+    --isa rv32imc_zicsr_zifencei_zba_zbb_zbc_zbs \
+    --mabi ilp32 \
+    --priv u \
     --custom_target $(PWD) \
     --testlist $(PWD)/testlist.yaml \
     -v -o $(TEST_DIR)
+
+RISCV_DV_SIM_ARGS= \
+    --priv "$(RISCV_DV_PRIV)"
 
 MAKEFILE  = $(abspath $(MAKEFILE_LIST))
 
@@ -73,8 +104,8 @@ $(WORK_DIR)/defines.h: | $(WORK_DIR)
 $(WORK_DIR)/verilator/Vtb_top.mk: $(WORK_DIR)/defines.h
 	$(VERILATOR) --cc -CFLAGS $(VERILATOR_CFLAGS) $(VERILATOR_INC) \
         $(HDL_FILES) -f $(RV_ROOT)/testbench/flist --top-module tb_top \
-		-exe $(VERILATOR_EXE) -Wno-WIDTH -Wno-UNOPTFLAT -Wno-IMPLICITSTATIC --autoflush \
-		$(VERILATOR_COVERAGE) \
+		-exe $(VERILATOR_EXE) -Wno-WIDTH -Wno-UNOPTFLAT $(VERILATOR_NOIMPLICIT) --autoflush \
+		--timing $(VERILATOR_COVERAGE) \
 		-Mdir $(WORK_DIR)/verilator
 
 $(WORK_DIR)/verilator/Vtb_top: $(WORK_DIR)/verilator/Vtb_top.mk
@@ -97,15 +128,19 @@ $(TEST_DIR)/compile.log: $(TEST_DIR)
 # ISS simulation
 $(TEST_DIR)/iss_sim.log: $(TEST_DIR)/compile.log | $(TEST_DIR)
 	# Compile, simulate
-	PYTHONPATH=$(RISCV_DV_PATH)/pygen python3 $(RISCV_DV_PATH)/run.py $(RISCV_DV_ARGS) \
+	PYTHONPATH=$(RISCV_DV_PATH)/pygen python3 $(RISCV_DV_PATH)/run.py $(RISCV_DV_ARGS) $(RISCV_DV_SIM_ARGS) \
     --steps iss_sim 2>&1 | tee $@
 
-$(TEST_DIR)/asm_test/%.hex: $(TEST_DIR)/asm_test/%.o
-	$(RISCV_NM) -B -n $< > $(basename $@).sym
+# Generate symbols of executables
+%.sym: %.o
+	$(RISCV_NM) -B -n $< > $@
+
+# Convert executables
+%.hex: %.o
 	$(RISCV_OBJCOPY) -O verilog $< $@
 
 # HDL simulation
-$(SIM_DIR)/%.log: $(TEST_DIR)/asm_test/%.hex $(WORK_DIR)/verilator/Vtb_top
+$(SIM_DIR)/%.log: $(TEST_DIR)/asm_test/%.hex $(TEST_DIR)/asm_test/%.sym $(WORK_DIR)/verilator/Vtb_top
 	mkdir -p $(basename $@)
 	cp $< $(basename $@)/program.hex
 	cp $(basename $<).sym $(basename $@)/program.sym
@@ -152,6 +187,9 @@ generate:
 	
 	# Run RISC-V DV code generation
 	$(MAKE) -f $(MAKEFILE) $(TEST_DIR)/generate.log
+
+compile: $(TEST_DIR)/compile.log | $(TEST_DIR)
+	find $(TEST_DIR)/asm_test -name "*.S" | sed 's|\.S|.hex|g' | xargs $(MAKE) -f $(MAKEFILE)
 
 run:
 	# Run RISC-V DV compilation and simulation
